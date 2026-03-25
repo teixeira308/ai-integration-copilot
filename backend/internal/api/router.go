@@ -33,22 +33,26 @@ type GenerateRequest struct {
 
 // GenerateResponse is a lightweight acknowledgement for the POST /generate endpoint.
 type GenerateResponse struct {
-	JobID         string                      `json:"jobId"`
-	Status        string                      `json:"status"`
-	Title         string                      `json:"title,omitempty"`
-	Version       string                      `json:"version,omitempty"`
-	BaseURL       string                      `json:"baseUrl,omitempty"`
-	EndpointCount int                         `json:"endpointCount"`
-	Security      []parser.SecurityScheme     `json:"security,omitempty"`
-	PromptPreview string                      `json:"promptPreview,omitempty"`
-	ResultPreview string                      `json:"resultPreview,omitempty"`
-	Metrics       *generator.ExecutionMetrics `json:"metrics,omitempty"`
+	JobID         string                        `json:"jobId"`
+	Status        string                        `json:"status"`
+	Title         string                        `json:"title,omitempty"`
+	Version       string                        `json:"version,omitempty"`
+	BaseURL       string                        `json:"baseUrl,omitempty"`
+	EndpointCount int                           `json:"endpointCount"`
+	Security      []parser.SecurityScheme       `json:"security,omitempty"`
+	PromptPreview string                        `json:"promptPreview,omitempty"`
+	ResultPreview string                        `json:"resultPreview,omitempty"`
+	Metrics       *generator.ExecutionMetrics   `json:"metrics,omitempty"`
+	OutputDir     string                        `json:"outputDir,omitempty"`
+	ArchivePath   string                        `json:"archivePath,omitempty"`
+	Files         []generator.GeneratedFileMeta `json:"files,omitempty"`
 }
 
 // RegisterRoutes wires the API endpoints to the router.
 func RegisterRoutes(router *gin.Engine, cfg *config.Config) {
 	router.POST("/generate", handleGenerate)
 	router.GET("/generate/:id", handleJobStatus)
+	router.GET("/generate/:id/download", handleJobDownload)
 	router.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"status":      "ok",
@@ -121,6 +125,9 @@ func handleGenerate(ctx *gin.Context) {
 		PromptPreview: previewPrompt(prompt),
 		ResultPreview: previewResult(job.Result),
 		Metrics:       job.Metrics,
+		OutputDir:     job.OutputDir,
+		ArchivePath:   job.ArchivePath,
+		Files:         job.Files,
 	}
 
 	ctx.JSON(http.StatusAccepted, resp)
@@ -149,19 +156,49 @@ func handleJobStatus(ctx *gin.Context) {
 		ResultPreview: previewResult(job.Result),
 		Error:         job.Error,
 		Metrics:       job.Metrics,
+		OutputDir:     job.OutputDir,
+		ArchivePath:   job.ArchivePath,
+		Files:         job.Files,
 	})
 }
 
+func handleJobDownload(ctx *gin.Context) {
+	id := ctx.Param("id")
+	if id == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "id is required"})
+		return
+	}
+
+	job, ok := jobManager.Get(id)
+	if !ok {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	if job.Status != "succeeded" {
+		ctx.JSON(http.StatusConflict, gin.H{"error": "job is not ready for download"})
+		return
+	}
+	if strings.TrimSpace(job.ArchivePath) == "" {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "archive not found"})
+		return
+	}
+
+	ctx.FileAttachment(job.ArchivePath, filepath.Base(job.ArchivePath))
+}
+
 type JobStatusResponse struct {
-	JobID         string                      `json:"jobId"`
-	Status        string                      `json:"status"`
-	CreatedAt     time.Time                   `json:"createdAt"`
-	StartedAt     time.Time                   `json:"startedAt,omitempty"`
-	CompletedAt   time.Time                   `json:"completedAt,omitempty"`
-	PromptPreview string                      `json:"promptPreview,omitempty"`
-	ResultPreview string                      `json:"resultPreview,omitempty"`
-	Error         string                      `json:"error,omitempty"`
-	Metrics       *generator.ExecutionMetrics `json:"metrics,omitempty"`
+	JobID         string                        `json:"jobId"`
+	Status        string                        `json:"status"`
+	CreatedAt     time.Time                     `json:"createdAt"`
+	StartedAt     time.Time                     `json:"startedAt,omitempty"`
+	CompletedAt   time.Time                     `json:"completedAt,omitempty"`
+	PromptPreview string                        `json:"promptPreview,omitempty"`
+	ResultPreview string                        `json:"resultPreview,omitempty"`
+	Error         string                        `json:"error,omitempty"`
+	Metrics       *generator.ExecutionMetrics   `json:"metrics,omitempty"`
+	OutputDir     string                        `json:"outputDir,omitempty"`
+	ArchivePath   string                        `json:"archivePath,omitempty"`
+	Files         []generator.GeneratedFileMeta `json:"files,omitempty"`
 }
 
 func saveUploadedSpec(file *multipart.FileHeader) (string, error) {

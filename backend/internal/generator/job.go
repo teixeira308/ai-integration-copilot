@@ -20,6 +20,9 @@ type Job struct {
 	Result      string               `json:"result,omitempty"`
 	Error       string               `json:"error,omitempty"`
 	Metrics     *ExecutionMetrics    `json:"metrics,omitempty"`
+	OutputDir   string               `json:"outputDir,omitempty"`
+	ArchivePath string               `json:"archivePath,omitempty"`
+	Files       []GeneratedFileMeta  `json:"files,omitempty"`
 	Spec        *parser.SpecDocument `json:"-"`
 }
 
@@ -111,9 +114,30 @@ func (m *Manager) Schedule(job *Job, exec Executor) {
 				j.Error = err.Error()
 				log.Printf("job=%s phase=job status=failed total_ms=%d error=%q", j.ID, j.CompletedAt.Sub(j.CreatedAt).Milliseconds(), j.Error)
 			} else {
+				outputDir, files, persistErr := persistGeneratedOutput(j.ID, result.Output)
+				if persistErr != nil {
+					j.Status = "failed"
+					j.Error = persistErr.Error()
+					j.Result = result.Output
+					j.Metrics = result.Metrics
+					log.Printf("job=%s phase=artifacts status=failed error=%q", j.ID, j.Error)
+					return
+				}
 				j.Status = "succeeded"
 				j.Result = result.Output
 				j.Metrics = result.Metrics
+				j.OutputDir = outputDir
+				j.Files = files
+				archivePath, archiveErr := packageGeneratedOutput(j.ID, j.OutputDir, j.Files)
+				if archiveErr != nil {
+					j.Status = "failed"
+					j.Error = archiveErr.Error()
+					log.Printf("job=%s phase=archive status=failed error=%q", j.ID, j.Error)
+					return
+				}
+				j.ArchivePath = archivePath
+				log.Printf("job=%s phase=artifacts status=succeeded output_dir=%s file_count=%d", j.ID, j.OutputDir, len(j.Files))
+				log.Printf("job=%s phase=archive status=succeeded archive_path=%s", j.ID, j.ArchivePath)
 				log.Printf("job=%s phase=job status=succeeded total_ms=%d result_chars=%d", j.ID, j.CompletedAt.Sub(j.CreatedAt).Milliseconds(), len(j.Result))
 			}
 		})
