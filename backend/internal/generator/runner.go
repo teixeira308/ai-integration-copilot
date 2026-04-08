@@ -13,37 +13,67 @@ import (
 )
 
 const (
-	defaultModel   = "qwen2.5-coder"
-	defaultBaseURL = "http://host.docker.internal:11434"
+	defaultModel   = "gemini-3.1-flash-lite-preview"
+	defaultBaseURL = "https://generativelanguage.googleapis.com"
 )
 
-type ollamaGenerateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+type geminiGenerateRequest struct {
+	Contents []geminiContent `json:"contents"`
+	Config   geminiConfig    `json:"generationConfig"`
 }
 
-type ollamaGenerateResponse struct {
-	Response           string `json:"response"`
-	Error              string `json:"error"`
-	TotalDuration      int64  `json:"total_duration"`
-	LoadDuration       int64  `json:"load_duration"`
-	PromptEvalCount    int    `json:"prompt_eval_count"`
-	PromptEvalDuration int64  `json:"prompt_eval_duration"`
-	EvalCount          int    `json:"eval_count"`
-	EvalDuration       int64  `json:"eval_duration"`
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
 }
 
-// Runner executes generation jobs via the Ollama HTTP API.
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiConfig struct {
+	ResponseMIMEType string `json:"responseMimeType,omitempty"`
+}
+
+type geminiGenerateResponse struct {
+	Candidates     []geminiCandidate     `json:"candidates"`
+	PromptFeedback *geminiPromptFeedback `json:"promptFeedback,omitempty"`
+	UsageMetadata  *geminiUsageMetadata  `json:"usageMetadata,omitempty"`
+	Error          *geminiError          `json:"error,omitempty"`
+}
+
+type geminiCandidate struct {
+	Content       *geminiContent   `json:"content,omitempty"`
+	FinishReason  string           `json:"finishReason,omitempty"`
+	SafetyRatings []map[string]any `json:"safetyRatings,omitempty"`
+}
+
+type geminiPromptFeedback struct {
+	BlockReason string `json:"blockReason,omitempty"`
+}
+
+type geminiUsageMetadata struct {
+	PromptTokenCount     int `json:"promptTokenCount,omitempty"`
+	CandidatesTokenCount int `json:"candidatesTokenCount,omitempty"`
+	TotalTokenCount      int `json:"totalTokenCount,omitempty"`
+}
+
+type geminiError struct {
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	Status  string `json:"status,omitempty"`
+}
+
+// Runner executes generation jobs via the Gemini generateContent API.
 type Runner struct {
 	model      string
 	baseURL    string
+	apiKey     string
 	timeout    time.Duration
 	httpClient *http.Client
 }
 
-// NewRunner returns a runner configured for the given Ollama model name, base URL, and timeout.
-func NewRunner(model, baseURL, timeoutValue string) *Runner {
+// NewRunner returns a runner configured for the given Gemini model, base URL, API key, and timeout.
+func NewRunner(model, baseURL, apiKey, timeoutValue string) *Runner {
 	if strings.TrimSpace(model) == "" {
 		model = defaultModel
 	}
@@ -60,6 +90,7 @@ func NewRunner(model, baseURL, timeoutValue string) *Runner {
 	return &Runner{
 		model:   model,
 		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  strings.TrimSpace(apiKey),
 		timeout: timeout,
 		httpClient: &http.Client{
 			Timeout: timeout,
@@ -67,68 +98,88 @@ func NewRunner(model, baseURL, timeoutValue string) *Runner {
 	}
 }
 
-// Execute calls the Ollama API and returns the generated output.
+// Execute calls the Gemini API and returns the generated output.
 func (r *Runner) Execute(job *Job) (*ExecutionResult, error) {
-	payload := ollamaGenerateRequest{
-		Model:  r.model,
-		Prompt: job.Prompt,
-		Stream: false,
+	if r.apiKey == "" {
+		return nil, fmt.Errorf("gemini api key is not configured")
+	}
+
+	payload := geminiGenerateRequest{
+		Contents: []geminiContent{
+			{
+				Parts: []geminiPart{
+					{Text: job.Prompt},
+				},
+			},
+		},
+		Config: geminiConfig{
+			ResponseMIMEType: "application/json",
+		},
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal ollama request: %w", err)
+		return nil, fmt.Errorf("marshal gemini request: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
 	defer cancel()
 	requestStartedAt := time.Now()
-	log.Printf("job=%s phase=ollama start model=%s base_url=%s timeout=%s prompt_chars=%d", job.ID, r.model, r.baseURL, r.timeout, len(job.Prompt))
+	log.Printf("job=%s phase=gemini start model=%s base_url=%s timeout=%s prompt_chars=%d", job.ID, r.model, r.baseURL, r.timeout, len(job.Prompt))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.baseURL+"/api/generate", bytes.NewReader(body))
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent", r.baseURL, r.model)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create ollama request: %w", err)
+		return nil, fmt.Errorf("create gemini request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", r.apiKey)
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
-		log.Printf("job=%s phase=ollama failed duration_ms=%d error=%q", job.ID, time.Since(requestStartedAt).Milliseconds(), err.Error())
-		return nil, fmt.Errorf("ollama request failed: %w", err)
+		log.Printf("job=%s phase=gemini failed duration_ms=%d error=%q", job.ID, time.Since(requestStartedAt).Milliseconds(), err.Error())
+		return nil, fmt.Errorf("gemini request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read ollama response: %w", err)
+		return nil, fmt.Errorf("read gemini response: %w", err)
 	}
 
 	if resp.StatusCode >= 300 {
-		log.Printf("job=%s phase=ollama failed duration_ms=%d status=%d", job.ID, time.Since(requestStartedAt).Milliseconds(), resp.StatusCode)
-		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		log.Printf("job=%s phase=gemini failed duration_ms=%d status=%d", job.ID, time.Since(requestStartedAt).Milliseconds(), resp.StatusCode)
+		return nil, fmt.Errorf("gemini returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	var parsed ollamaGenerateResponse
+	var parsed geminiGenerateResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return nil, fmt.Errorf("decode ollama response: %w", err)
+		return nil, fmt.Errorf("decode gemini response: %w", err)
 	}
 
-	if strings.TrimSpace(parsed.Error) != "" {
-		return nil, fmt.Errorf("ollama error: %s", parsed.Error)
+	if parsed.Error != nil {
+		return nil, fmt.Errorf("gemini error: %s", strings.TrimSpace(parsed.Error.Message))
+	}
+
+	if parsed.PromptFeedback != nil && strings.TrimSpace(parsed.PromptFeedback.BlockReason) != "" {
+		return nil, fmt.Errorf("gemini blocked prompt: %s", parsed.PromptFeedback.BlockReason)
+	}
+
+	output := extractGeminiText(parsed)
+	if strings.TrimSpace(output) == "" {
+		return nil, fmt.Errorf("gemini returned an empty response")
 	}
 
 	metrics := &ExecutionMetrics{
 		Model:             r.model,
 		BaseURL:           r.baseURL,
 		PromptChars:       len(job.Prompt),
-		ResultChars:       len(parsed.Response),
-		TotalDurationMS:   parsed.TotalDuration / int64(time.Millisecond),
-		LoadDurationMS:    parsed.LoadDuration / int64(time.Millisecond),
-		PromptEvalCount:   parsed.PromptEvalCount,
-		PromptEvalMS:      parsed.PromptEvalDuration / int64(time.Millisecond),
-		EvalCount:         parsed.EvalCount,
-		EvalDurationMS:    parsed.EvalDuration / int64(time.Millisecond),
+		ResultChars:       len(output),
 		RequestDurationMS: time.Since(requestStartedAt).Milliseconds(),
+	}
+	if parsed.UsageMetadata != nil {
+		metrics.PromptEvalCount = parsed.UsageMetadata.PromptTokenCount
+		metrics.EvalCount = parsed.UsageMetadata.CandidatesTokenCount
 	}
 	if job.Spec != nil {
 		metrics.EndpointCount = len(job.Spec.Endpoints)
@@ -136,17 +187,29 @@ func (r *Runner) Execute(job *Job) (*ExecutionResult, error) {
 	}
 
 	log.Printf(
-		"job=%s phase=ollama succeeded duration_ms=%d total_duration_ms=%d eval_count=%d prompt_eval_count=%d result_chars=%d",
+		"job=%s phase=gemini succeeded duration_ms=%d eval_count=%d prompt_eval_count=%d result_chars=%d",
 		job.ID,
 		metrics.RequestDurationMS,
-		metrics.TotalDurationMS,
 		metrics.EvalCount,
 		metrics.PromptEvalCount,
 		metrics.ResultChars,
 	)
 
 	return &ExecutionResult{
-		Output:  parsed.Response,
+		Output:  output,
 		Metrics: metrics,
 	}, nil
+}
+
+func extractGeminiText(resp geminiGenerateResponse) string {
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, part := range resp.Candidates[0].Content.Parts {
+		builder.WriteString(part.Text)
+	}
+
+	return builder.String()
 }

@@ -1,0 +1,18 @@
+.env
+.env.*
+!.env.example
+
+# Local binaries
+backend/server
+*.exe
+*.out
+*.test
+
+# Go workspace artifacts
+coverage.out
+cover.out
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

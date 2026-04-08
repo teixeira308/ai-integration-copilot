@@ -19,10 +19,7 @@ import (
 	"github.com/guilhermeteixeira/ai-integration-copilot/backend/internal/parser"
 )
 
-var (
-	jobManager = generator.NewManager()
-	jobRunner  = generator.NewRunner(os.Getenv("OLLAMA_MODEL"), os.Getenv("OLLAMA_BASE_URL"), os.Getenv("OLLAMA_TIMEOUT"))
-)
+var jobManager = generator.NewManager()
 
 // GenerateRequest describes the bare minimum information required to start generation.
 type GenerateRequest struct {
@@ -50,18 +47,23 @@ type GenerateResponse struct {
 
 // RegisterRoutes wires the API endpoints to the router.
 func RegisterRoutes(router *gin.Engine, cfg *config.Config) {
-	router.POST("/generate", handleGenerate)
+	jobRunner := generator.NewRunner(cfg.AI.Model, cfg.AI.BaseURL, cfg.AI.APIKey, cfg.AI.Timeout)
+
+	router.POST("/generate", func(ctx *gin.Context) {
+		handleGenerate(ctx, jobRunner)
+	})
 	router.GET("/generate/:id", handleJobStatus)
 	router.GET("/generate/:id/download", handleJobDownload)
 	router.GET("/health", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"status":      "ok",
 			"server_port": cfg.Server.Port,
+			"ai_model":    cfg.AI.Model,
 		})
 	})
 }
 
-func handleGenerate(ctx *gin.Context) {
+func handleGenerate(ctx *gin.Context, jobRunner *generator.Runner) {
 	requestStartedAt := time.Now()
 	var specPath string
 	contentType := ctx.ContentType()

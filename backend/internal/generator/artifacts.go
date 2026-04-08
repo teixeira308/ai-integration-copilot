@@ -28,7 +28,11 @@ type GeneratedFileMeta struct {
 func persistGeneratedOutput(jobID string, raw string) (string, []GeneratedFileMeta, error) {
 	pkg, err := parseGeneratedPackage(raw)
 	if err != nil {
-		return "", nil, err
+		rawPath, writeErr := persistRawModelOutput(jobID, raw)
+		if writeErr != nil {
+			return "", nil, fmt.Errorf("%w (raw_output_preview=%q, raw_output_write_error=%v)", err, previewInvalidPayload(raw), writeErr)
+		}
+		return "", nil, fmt.Errorf("%w (raw_output=%s, raw_output_preview=%q)", err, rawPath, previewInvalidPayload(raw))
 	}
 	if len(pkg.Files) == 0 {
 		return "", nil, fmt.Errorf("generated package contained no files")
@@ -117,6 +121,32 @@ func packageGeneratedOutput(jobID, outputDir string, files []GeneratedFileMeta) 
 	}
 
 	return zipPath, nil
+}
+
+func persistRawModelOutput(jobID, raw string) (string, error) {
+	outputDir := filepath.Join(os.TempDir(), "ai-integration-output", jobID)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", fmt.Errorf("create raw output directory: %w", err)
+	}
+
+	rawPath := filepath.Join(outputDir, "raw-output.txt")
+	if err := os.WriteFile(rawPath, []byte(raw), 0o644); err != nil {
+		return "", fmt.Errorf("write raw output: %w", err)
+	}
+
+	return rawPath, nil
+}
+
+func previewInvalidPayload(raw string) string {
+	payload := strings.TrimSpace(raw)
+	payload = strings.ReplaceAll(payload, "\r\n", "\n")
+	payload = strings.ReplaceAll(payload, "\n", "\\n")
+
+	if len(payload) <= 240 {
+		return payload
+	}
+
+	return payload[:240] + "..."
 }
 
 func parseGeneratedPackage(raw string) (*generatedPackage, error) {
