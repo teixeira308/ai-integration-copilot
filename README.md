@@ -37,6 +37,9 @@ backend/
   internal/config/         config por ambiente
   internal/generator/      jobs, runner Gemini e persistência de artefatos
   internal/parser/         parse de OpenAPI
+frontend/
+  src/                     app React + Tailwind
+  vite.config.js           dev server com proxy para o backend
 ```
 
 ## Requisitos
@@ -75,6 +78,26 @@ go run ./cmd/server
 
 Servidor padrão: `http://localhost:8080`
 
+## Frontend local
+
+O frontend foi criado em React + TailwindCSS e usa o Vite com proxy `/api -> http://localhost:8080`.
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+App padrão: `http://localhost:5173`
+
+Fluxo disponível no frontend:
+
+- upload de spec OpenAPI
+- envio por caminho local
+- polling do status do job
+- visualização de preview do prompt e do resultado
+- download do `.zip` gerado
+
 ## Rodando com Docker Compose
 
 ```bash
@@ -83,9 +106,11 @@ docker compose up --build
 
 Se você usar um arquivo `.env` na raiz do projeto, o Compose lê `GEMINI_API_KEY` automaticamente.
 
-O `docker-compose.yml` já sobe o backend com:
+O `docker-compose.yml` agora sobe:
 
-- porta `8080`
+- backend em `http://localhost:8080`
+- frontend em `http://localhost:3000`
+- proxy do frontend para `/api` apontando para o backend
 - modelo `gemini-3.1-flash-lite-preview`
 - timeout `5m`
 

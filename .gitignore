@@ -12,6 +12,10 @@ backend/server
 coverage.out
 cover.out
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # OS / editor
 .DS_Store
 .idea/
