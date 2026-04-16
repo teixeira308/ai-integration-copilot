@@ -1,86 +1,117 @@
 # AI Integration Copilot
 
-Ferramenta para gerar um projeto Go de integração a partir de uma especificação OpenAPI usando Gemini via API.
+Generate Go integration packages from OpenAPI specs using a Gemini-powered backend and a React frontend.
 
-## Estado atual
+## Overview
 
-Hoje o projeto implementa o backend do pipeline:
+AI Integration Copilot takes an OpenAPI file, summarizes the contract, sends a constrained generation prompt to Gemini, and returns a downloadable `.zip` containing the generated Go package.
 
-- recebe uma spec OpenAPI por upload multipart ou por caminho local
-- faz parse da spec com `kin-openapi`
-- monta um prompt enxuto para geração de código
-- chama o Gemini via HTTP
-- persiste os arquivos gerados em `/tmp`
-- empacota o resultado em `.zip`
-- expõe status e download por job
+The project currently includes:
 
-O frontend ainda não está implementado.
+- a Go backend that parses OpenAPI specs, runs generation jobs, stores artifacts, and exposes job status endpoints
+- a React + Tailwind frontend for uploading a spec, tracking the job, and downloading the generated archive
+- Docker Compose support for running the full stack locally
 
-## Fluxo
+## Architecture
 
-1. `POST /generate`
-2. backend salva ou lê a spec
-3. parser extrai metadados, endpoints e autenticação
-4. prompt builder pede um projeto Go mínimo e pronto para usar
-5. runner envia o prompt para o Gemini
-6. o modelo retorna JSON com arquivos
-7. backend grava os arquivos e gera um archive `.zip`
-8. cliente consulta `GET /generate/:id` e baixa em `GET /generate/:id/download`
+```mermaid
+flowchart LR
+    U[User] --> F[React Frontend]
+    F -->|POST /api/generate| B[Go Backend]
+    B --> P[OpenAPI Parser]
+    B --> A[Prompt Builder]
+    A --> G[Gemini API]
+    G --> B
+    B --> Z[Artifact Writer and ZIP Packager]
+    B -->|GET /generate/:id| F
+    B -->|GET /generate/:id/download| F
+    F --> U
+```
 
-## Estrutura
+## Generation Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant Gemini
+
+    User->>Frontend: Upload OpenAPI file
+    Frontend->>Backend: POST /api/generate
+    Backend->>Backend: Save spec and parse OpenAPI
+    Backend->>Backend: Build generation prompt
+    Backend->>Gemini: generateContent
+    Gemini-->>Backend: JSON with generated files
+    Backend->>Backend: Persist files and create ZIP
+    Frontend->>Backend: Poll GET /api/generate/:id
+    Backend-->>Frontend: Job status and artifacts
+    User->>Frontend: Download ZIP
+    Frontend->>Backend: GET /api/generate/:id/download
+```
+
+## Repository Structure
 
 ```text
 backend/
-  cmd/server/              entrypoint HTTP
-  internal/api/            rotas e handlers
-  internal/ai/             montagem do prompt
-  internal/config/         config por ambiente
-  internal/generator/      jobs, runner Gemini e persistência de artefatos
-  internal/parser/         parse de OpenAPI
+  cmd/server/              HTTP entrypoint
+  internal/api/            routes and handlers
+  internal/ai/             prompt construction
+  internal/config/         environment configuration
+  internal/generator/      jobs, Gemini runner, artifact persistence
+  internal/parser/         OpenAPI parsing
+
 frontend/
-  src/                     app React + Tailwind
-  vite.config.js           dev server com proxy para o backend
+  src/                     React + Tailwind app
+  Dockerfile               production frontend image
+  nginx.conf               static serving + /api proxy
+  vite.config.js           local dev server config
 ```
 
-## Requisitos
+## Requirements
 
 - Go `1.25.1`
-- chave de API do Gemini
-- um modelo Gemini compatível, por padrão `gemini-3.1-flash-lite-preview`
+- Node.js `20+`
+- a Gemini API key
+- Docker and Docker Compose if you want to run the full stack in containers
 
-## Variáveis de ambiente
+## Environment Variables
 
-- `PORT`: porta do backend. Padrão: `8080`
-- `GEMINI_API_KEY`: chave da API Gemini. Obrigatória
-- `GEMINI_MODEL`: modelo usado na geração. Padrão: `gemini-3.1-flash-lite-preview`
-- `GEMINI_BASE_URL`: URL base da API Gemini. Padrão: `https://generativelanguage.googleapis.com`
-- `GEMINI_TIMEOUT`: timeout da chamada ao Gemini. Padrão: `2m`
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `PORT` | No | `8080` | Backend HTTP port |
+| `GEMINI_API_KEY` | Yes | - | Gemini API key |
+| `GEMINI_MODEL` | No | `gemini-3.1-flash-lite-preview` | Gemini model used for generation |
+| `GEMINI_BASE_URL` | No | `https://generativelanguage.googleapis.com` | Gemini API base URL |
+| `GEMINI_TIMEOUT` | No | `2m` | Timeout for Gemini requests |
 
-Exemplo de `.env`:
+Example `.env`:
 
 ```dotenv
 PORT=8080
-GEMINI_API_KEY=sua_chave_aqui
+GEMINI_API_KEY=your_api_key_here
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com
 GEMINI_TIMEOUT=2m
 ```
 
-O backend autentica no Gemini usando o header `x-goog-api-key`.
+The backend authenticates against Gemini using the `x-goog-api-key` header.
 
-## Rodando localmente
+## Running Locally
+
+### Backend
 
 ```bash
-export GEMINI_API_KEY=sua_chave_aqui
+export GEMINI_API_KEY=your_api_key_here
 cd backend
 go run ./cmd/server
 ```
 
-Servidor padrão: `http://localhost:8080`
+Backend URL: `http://localhost:8080`
 
-## Frontend local
+### Frontend
 
-O frontend foi criado em React + TailwindCSS e usa o Vite com proxy `/api -> http://localhost:8080`.
+The frontend uses Vite locally and proxies `/api` to `http://localhost:8080`.
 
 ```bash
 cd frontend
@@ -88,72 +119,82 @@ npm install
 npm run dev
 ```
 
-App padrão: `http://localhost:5173`
+Frontend URL: `http://localhost:5173`
 
-Fluxo disponível no frontend:
-
-- upload de spec OpenAPI
-- envio por caminho local
-- polling do status do job
-- visualização de preview do prompt e do resultado
-- download do `.zip` gerado
-
-## Rodando com Docker Compose
+## Running with Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-Se você usar um arquivo `.env` na raiz do projeto, o Compose lê `GEMINI_API_KEY` automaticamente.
+If you keep a `.env` file in the project root, Compose will load `GEMINI_API_KEY` automatically.
 
-O `docker-compose.yml` agora sobe:
+Services exposed by Compose:
 
-- backend em `http://localhost:8080`
-- frontend em `http://localhost:3000`
-- proxy do frontend para `/api` apontando para o backend
-- modelo `gemini-3.1-flash-lite-preview`
-- timeout `5m`
+- backend: `http://localhost:8080`
+- frontend: `http://localhost:3000`
 
-## Endpoints
+The frontend container serves the static app with Nginx and proxies `/api` requests to the backend container.
+
+## Frontend Experience
+
+The frontend currently supports:
+
+- uploading an OpenAPI file in JSON or YAML
+- starting a generation job
+- tracking job progress in the UI
+- listing generated artifacts after success
+- downloading the generated `.zip`
+- restarting the flow to submit a new spec
+
+## API Endpoints
 
 ### `GET /health`
 
-Resposta de saúde do serviço.
+Health check for the backend service.
+
+Example:
+
+```bash
+curl http://localhost:8080/health
+```
 
 ### `POST /generate`
 
-Aceita:
+Starts a generation job.
 
-- `multipart/form-data` com `specFile`
-- `application/json` com `specPath`
+Accepted input:
 
-Exemplo com arquivo:
+- `multipart/form-data` with `specFile`
+- `application/json` with `specPath`
+
+File upload example:
 
 ```bash
 curl -X POST http://localhost:8080/generate \
-  -F "specFile=@/caminho/para/openapi.yaml"
+  -F "specFile=@/path/to/openapi.yaml"
 ```
 
-Exemplo com JSON:
+Local path example:
 
 ```bash
 curl -X POST http://localhost:8080/generate \
   -H "Content-Type: application/json" \
-  -d '{"specSource":"file","specPath":"/caminho/para/openapi.yaml"}'
+  -d '{"specSource":"file","specPath":"/path/to/openapi.yaml"}'
 ```
 
-Resposta esperada:
+Response includes fields such as:
 
 - `jobId`
 - `status`
-- metadados da spec
-- preview do prompt
+- spec metadata
+- prompt preview
 
 ### `GET /generate/:id`
 
-Retorna o status do job, erro se houver, métricas, arquivos gerados e caminhos de saída.
+Returns the current status for a generation job, including timings, errors, and generated file metadata when available.
 
-Exemplo:
+Example:
 
 ```bash
 curl http://localhost:8080/generate/job-123
@@ -161,17 +202,17 @@ curl http://localhost:8080/generate/job-123
 
 ### `GET /generate/:id/download`
 
-Baixa o `.zip` do job quando o status for `succeeded`.
+Downloads the `.zip` artifact after the job reaches `succeeded`.
 
-Exemplo:
+Example:
 
 ```bash
 curl -O -J http://localhost:8080/generate/job-123/download
 ```
 
-## Formato esperado do modelo
+## Expected Model Output
 
-O backend espera que o modelo retorne somente JSON neste formato:
+The backend expects the model to return valid JSON in this shape:
 
 ```json
 {
@@ -184,7 +225,7 @@ O backend espera que o modelo retorne somente JSON neste formato:
 }
 ```
 
-O prompt atual pede exatamente estes arquivos:
+The prompt currently asks for these core files:
 
 - `go.mod`
 - `client/client.go`
@@ -193,18 +234,28 @@ O prompt atual pede exatamente estes arquivos:
 - `cmd/example/main.go`
 - `README.md`
 
-## Saída gerada
+## Generated Artifacts
 
-Os arquivos gerados são gravados em um diretório temporário por job:
+Generated files are written to temporary directories per job:
 
-- specs enviadas: `/tmp/ai-integration-specs`
-- artefatos gerados: `/tmp/ai-integration-output/<job-id>`
-- archives: `/tmp/ai-integration-output/archives/<job-id>.zip`
+- uploaded specs: `/tmp/ai-integration-specs`
+- generated artifacts: `/tmp/ai-integration-output/<job-id>`
+- zip archives: `/tmp/ai-integration-output/archives/<job-id>.zip`
 
-## Limites atuais
+## Current Limitations
 
-- `specUrl` ainda não está implementado
-- jobs ficam só em memória
-- não há persistência de histórico após restart
-- frontend ainda não existe
-- diagramas Mermaid ainda não são gerados
+- `specUrl` is not implemented yet
+- jobs are stored in memory only
+- job history does not survive backend restarts
+- generation quality still depends heavily on prompt quality and model behavior
+- the pipeline is not yet template-driven or post-validated with generated tests
+
+## Roadmap Direction
+
+The next meaningful improvements are likely:
+
+- stronger OpenAPI normalization before prompting the model
+- better post-generation validation and rejection rules
+- richer schema extraction for more reliable typing
+- generated tests and stricter artifact verification
+
